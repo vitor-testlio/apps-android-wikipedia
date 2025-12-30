@@ -31,6 +31,10 @@ jobs:
         script: |
           # Wait for emulator to be fully ready
           adb wait-for-device
+          # Install apps first
+          ./gradlew installDevDebug installDevDebugAndroidTest --stacktrace --no-daemon
+          # Wait a moment for installation to complete
+          sleep 5
           # Grant POST_NOTIFICATIONS permission to both app and test app
           adb shell pm grant org.wikipedia android.permission.POST_NOTIFICATIONS || true
           adb shell pm grant org.wikipedia.test android.permission.POST_NOTIFICATIONS || true

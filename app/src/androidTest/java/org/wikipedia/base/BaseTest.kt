@@ -10,6 +10,7 @@ import androidx.test.espresso.intent.Intents
 import androidx.test.ext.junit.rules.ActivityScenarioRule
 import androidx.test.platform.app.InstrumentationRegistry
 import androidx.test.rule.GrantPermissionRule
+import org.wikipedia.base.SafeGrantPermissionRule
 import androidx.test.uiautomator.UiDevice
 import org.junit.After
 import org.junit.Before
@@ -56,7 +57,7 @@ abstract class BaseTest<T : AppCompatActivity>(
     var composeTestRule = createComposeRule()
 
     @get:Rule
-    val permissionRule: GrantPermissionRule = GrantPermissionRule.grant(
+    val permissionRule: SafeGrantPermissionRule = SafeGrantPermissionRule.grant(
         Manifest.permission.POST_NOTIFICATIONS
     )
 
