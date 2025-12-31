@@ -43,16 +43,48 @@ jobs:
           # Pull Allure results immediately after tests (before emulator is terminated)
           echo "📥 Pulling Allure results from device..."
           mkdir -p allure-results
-          # Check TestStorage location first (orchestrator)
+          
+          # Debug: List what's in TestStorage directory
+          echo "🔍 Checking TestStorage location..."
+          adb shell "ls -la /sdcard/googletest/test_outputfiles/" 2>/dev/null || echo "TestStorage base directory not accessible"
+          adb shell "ls -la /sdcard/googletest/test_outputfiles/allure-results/" 2>/dev/null || echo "Allure results directory not found"
+          
+          # Try TestStorage location first (orchestrator)
           if adb shell "test -d /sdcard/googletest/test_outputfiles/allure-results" 2>/dev/null; then
-            echo "✅ Found results in TestStorage location"
-            adb exec-out sh -c "cd /sdcard/googletest/test_outputfiles && tar cf - allure-results" | tar xvf - -C allure-results --strip-components=0 2>/dev/null || true
+            echo "✅ Found results in TestStorage location, pulling..."
+            # Method 1: Direct tar extraction
+            if ! adb exec-out sh -c "cd /sdcard/googletest/test_outputfiles && tar cf - allure-results" 2>/dev/null | tar xvf - -C allure-results 2>/dev/null; then
+              echo "⚠️  Method 1 failed, trying alternative..."
+              # Method 2: Pull to temp and move
+              TEMP_DIR=$(mktemp -d)
+              if adb pull "/sdcard/googletest/test_outputfiles/allure-results" "$TEMP_DIR/" 2>/dev/null; then
+                if [ -d "$TEMP_DIR/allure-results" ]; then
+                  cp -r "$TEMP_DIR/allure-results"/* allure-results/ 2>/dev/null || true
+                else
+                  cp -r "$TEMP_DIR"/* allure-results/ 2>/dev/null || true
+                fi
+                rm -rf "$TEMP_DIR"
+              fi
+            fi
+            # Verify we got files
+            if [ -n "$(ls -A allure-results 2>/dev/null)" ]; then
+              echo "✅ Successfully pulled $(ls -1 allure-results | wc -l) files"
+            else
+              echo "⚠️  Pull completed but directory is empty"
+            fi
           elif adb shell "test -d /data/data/org.wikipedia.test/files/allure-results" 2>/dev/null; then
-            echo "✅ Found results in app files directory"
-            adb exec-out run-as org.wikipedia.test sh -c "cd /data/data/org.wikipedia.test/files && tar cf - allure-results" | tar xvf - -C allure-results 2>/dev/null || true
+            echo "✅ Found results in app files directory, pulling..."
+            adb exec-out run-as org.wikipedia.test sh -c "cd /data/data/org.wikipedia.test/files && tar cf - allure-results" 2>/dev/null | tar xvf - -C allure-results 2>/dev/null || true
+            if [ -n "$(ls -A allure-results 2>/dev/null)" ]; then
+              echo "✅ Successfully pulled $(ls -1 allure-results | wc -l) files"
+            fi
           else
             echo "⚠️  Allure results not found on device"
+            echo "🔍 Searching all possible locations..."
+            adb shell "find /sdcard -name '*allure*' -type d 2>/dev/null" || true
+            adb shell "find /data -name '*allure*' -type d 2>/dev/null" || true
           fi
+          
           # Exit with test result code if tests failed
           if [ -n "${TEST_EXIT_CODE:-}" ]; then
             exit $TEST_EXIT_CODE
