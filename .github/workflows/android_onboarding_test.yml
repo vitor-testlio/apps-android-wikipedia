@@ -17,102 +17,75 @@ jobs:
 
     steps:
     - uses: actions/checkout@v6
+    
     - uses: actions/setup-java@v5
       with:
         distribution: 'temurin'
         java-version: '17'
         cache: 'gradle'
+    
     - uses: gradle/gradle-build-action@v3
 
-    - name: Instrumentation Tests
+    - name: Run Instrumentation Tests
       uses: reactivecircus/android-emulator-runner@v2
       with:
         api-level: 29
         script: |
-          # Wait for emulator to be fully ready
           adb wait-for-device
-          # Install apps first
-          ./gradlew installDevDebug installDevDebugAndroidTest --stacktrace --no-daemon
-          # Wait a moment for installation to complete
+          
+          # Install apps
+          ./gradlew installDevDebug installDevDebugAndroidTest --no-daemon
           sleep 5
-          # Grant POST_NOTIFICATIONS permission to both app and test app
+          
+          # Grant permissions
           adb shell pm grant org.wikipedia android.permission.POST_NOTIFICATIONS || true
           adb shell pm grant org.wikipedia.test android.permission.POST_NOTIFICATIONS || true
-          # Run the tests (allow failure to continue and pull results)
-          ./gradlew connectedDevDebugAndroidTest --stacktrace --no-daemon -P android.testInstrumentationRunnerArguments.class=org.wikipedia.tests.OnboardingTest || TEST_EXIT_CODE=$?
-          # Pull Allure results immediately after tests (before emulator is terminated)
-          echo "📥 Pulling Allure results from device..."
+          
+          # Run tests
+          ./gradlew connectedDevDebugAndroidTest \
+            --no-daemon \
+            -P android.testInstrumentationRunnerArguments.class=org.wikipedia.tests.OnboardingTest || TEST_EXIT_CODE=$?
+          
+          # Pull Allure results from TestStorage (orchestrator)
+          echo "📥 Pulling Allure results..."
           mkdir -p allure-results
           
-          # Debug: List what's in TestStorage directory
-          echo "🔍 Checking TestStorage location..."
-          adb shell "ls -la /sdcard/googletest/test_outputfiles/" 2>/dev/null || echo "TestStorage base directory not accessible"
-          adb shell "ls -la /sdcard/googletest/test_outputfiles/allure-results/" 2>/dev/null || echo "Allure results directory not found"
-          
-          # Try TestStorage location first (orchestrator)
           if adb shell "test -d /sdcard/googletest/test_outputfiles/allure-results" 2>/dev/null; then
-            echo "✅ Found results in TestStorage location, pulling..."
-            # Method 1: Direct tar extraction
-            if ! adb exec-out sh -c "cd /sdcard/googletest/test_outputfiles && tar cf - allure-results" 2>/dev/null | tar xvf - -C allure-results 2>/dev/null; then
-              echo "⚠️  Method 1 failed, trying alternative..."
-              # Method 2: Pull to temp and move
-              TEMP_DIR=$(mktemp -d)
-              if adb pull "/sdcard/googletest/test_outputfiles/allure-results" "$TEMP_DIR/" 2>/dev/null; then
-                if [ -d "$TEMP_DIR/allure-results" ]; then
-                  cp -r "$TEMP_DIR/allure-results"/* allure-results/ 2>/dev/null || true
-                else
-                  cp -r "$TEMP_DIR"/* allure-results/ 2>/dev/null || true
-                fi
-                rm -rf "$TEMP_DIR"
-              fi
-            fi
-            # Verify we got files
-            if [ -n "$(ls -A allure-results 2>/dev/null)" ]; then
-              echo "✅ Successfully pulled $(ls -1 allure-results | wc -l) files"
-            else
-              echo "⚠️  Pull completed but directory is empty"
-            fi
-          elif adb shell "test -d /data/data/org.wikipedia.test/files/allure-results" 2>/dev/null; then
-            echo "✅ Found results in app files directory, pulling..."
-            adb exec-out run-as org.wikipedia.test sh -c "cd /data/data/org.wikipedia.test/files && tar cf - allure-results" 2>/dev/null | tar xvf - -C allure-results 2>/dev/null || true
-            if [ -n "$(ls -A allure-results 2>/dev/null)" ]; then
-              echo "✅ Successfully pulled $(ls -1 allure-results | wc -l) files"
-            fi
-          else
-            echo "⚠️  Allure results not found on device"
-            echo "🔍 Searching all possible locations..."
-            adb shell "find /sdcard -name '*allure*' -type d 2>/dev/null" || true
-            adb shell "find /data -name '*allure*' -type d 2>/dev/null" || true
+            adb exec-out sh -c "cd /sdcard/googletest/test_outputfiles && tar cf - allure-results" 2>/dev/null | \
+              tar xvf - -C allure-results 2>/dev/null || true
           fi
           
-          # Exit with test result code if tests failed
+          if [ -z "$(ls -A allure-results 2>/dev/null)" ]; then
+            echo "⚠️  No Allure results found"
+          else
+            echo "✅ Pulled $(ls -1 allure-results | wc -l) result files"
+          fi
+          
+          # Exit with test result code
           if [ -n "${TEST_EXIT_CODE:-}" ]; then
             exit $TEST_EXIT_CODE
           fi
 
-    - name: Install Allure CLI
+    - name: Generate Allure Report
       if: ${{ always() }}
       run: |
-        npm install -g allure-commandline@latest
-        allure --version
-
-    - name: Generate Allure report
-      if: ${{ always() }}
-      env:
-        CI: true
-        GITHUB_ACTIONS: true
-      run: |
-        # Check if we have results from the test step
         if [ -d "allure-results" ] && [ "$(ls -A allure-results 2>/dev/null)" ]; then
-          echo "✅ Found Allure results, generating report..."
-          allure generate allure-results -o allure-report --clean
-          tar -czf allure-report.tar.gz allure-report
+          echo "📊 Generating Allure report..."
+          ./gradlew :app:downloadAllure :app:allureReport --no-daemon --no-configuration-cache
+          
+          if [ -d "app/build/reports/allure-report/allureReport" ]; then
+            cp -r app/build/reports/allure-report/allureReport allure-report
+            tar -czf allure-report.tar.gz allure-report
+            echo "✅ Report generated: allure-report/index.html"
+          else
+            echo "❌ Report generation failed"
+            exit 1
+          fi
         else
-          echo "⚠️  No Allure results found, trying pull script as fallback..."
-          chmod +x ./pull-allure-results.sh
-          ./pull-allure-results.sh || echo "⚠️  Could not generate report - no results available"
+          echo "⚠️  No results to generate report from"
         fi
-    - name: Upload test results
+
+    - name: Upload Test Results
       if: ${{ always() }}
       uses: actions/upload-artifact@v6
       with:
@@ -122,7 +95,7 @@ jobs:
           app/build/reports/androidTests/connected/**
         retention-days: 30
 
-    - name: Upload Allure report
+    - name: Upload Allure Report
       if: ${{ always() }}
       uses: actions/upload-artifact@v6
       with:

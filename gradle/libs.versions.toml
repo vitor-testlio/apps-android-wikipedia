@@ -3,6 +3,7 @@ allureKotlinAndroid = "2.4.0"
 allureKotlinJunit4 = "2.4.0"
 allureKotlinCommons = "2.4.0"
 allureKotlinModel = "2.4.0"
+allureGradle = "3.0.1"
 appcompat = "1.7.1"
 balloon = "1.7.0"
 browser = "1.9.0"
@@ -136,3 +137,6 @@ kotlin-android = { id = "org.jetbrains.kotlin.android", version.ref = "kotlinStd
 kotlin-serialization = { id = "org.jetbrains.kotlin.plugin.serialization", version.ref = "kotlinStdlibJdk8" }
 ksp-plugin = { id = 'com.google.devtools.ksp', version.ref = "kspPlugin" }
 compose-compiler = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "kotlinStdlibJdk8" }
+allure-adapter = { id = "io.qameta.allure-adapter", version.ref = "allureGradle" }
+allure-report = { id = "io.qameta.allure-report", version.ref = "allureGradle" }
+allure-download = { id = "io.qameta.allure-download", version.ref = "allureGradle" }
