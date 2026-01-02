@@ -39,13 +39,9 @@ jobs:
           # Wait for apps to be fully installed and ready
           sleep 10
           
-          # Verify packages are installed before granting permissions
-          if adb shell pm list packages | grep -q "org.wikipedia$"; then
-            adb shell pm grant org.wikipedia android.permission.POST_NOTIFICATIONS || true
-          fi
-          if adb shell pm list packages | grep -q "org.wikipedia.test$"; then
-            adb shell pm grant org.wikipedia.test android.permission.POST_NOTIFICATIONS || true
-          fi
+          # Grant permissions (will fail on API 29 as POST_NOTIFICATIONS doesn't exist, but that's okay)
+          adb shell pm grant org.wikipedia android.permission.POST_NOTIFICATIONS 2>/dev/null || true
+          adb shell pm grant org.wikipedia.test android.permission.POST_NOTIFICATIONS 2>/dev/null || true
           
           # Run tests
           ./gradlew connectedDevDebugAndroidTest --no-daemon -P android.testInstrumentationRunnerArguments.class=org.wikipedia.tests.OnboardingTest || TEST_EXIT_CODE=$?
