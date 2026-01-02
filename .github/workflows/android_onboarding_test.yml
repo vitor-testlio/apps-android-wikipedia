@@ -49,15 +49,12 @@ jobs:
           adb shell pm grant org.wikipedia.test android.permission.POST_NOTIFICATIONS 2>/dev/null || true
           
           echo "🧪 Running tests..."
-          ./gradlew connectedDevDebugAndroidTest \
-            --no-daemon \
-            -P android.testInstrumentationRunnerArguments.class=org.wikipedia.tests.OnboardingTest || TEST_EXIT_CODE=$?
+          ./gradlew connectedDevDebugAndroidTest --no-daemon -P android.testInstrumentationRunnerArguments.class=org.wikipedia.tests.OnboardingTest || TEST_EXIT_CODE=$?
           
           echo "📥 Pulling Allure results..."
           mkdir -p allure-results
           if adb shell "test -d /sdcard/googletest/test_outputfiles/allure-results" 2>/dev/null; then
-            adb exec-out sh -c "cd /sdcard/googletest/test_outputfiles && tar cf - allure-results" 2>/dev/null | \
-              tar xf - -C allure-results 2>/dev/null || true
+            adb exec-out sh -c "cd /sdcard/googletest/test_outputfiles && tar cf - allure-results" 2>/dev/null | tar xf - -C allure-results 2>/dev/null || true
           fi
           
           if [ -n "$(ls -A allure-results 2>/dev/null)" ]; then
