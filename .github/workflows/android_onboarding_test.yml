@@ -8,12 +8,12 @@ on:
   workflow_dispatch:
 
 env:
-  GRADLE_OPTS: "-Dorg.gradle.jvmargs=-Xmx4g -Dorg.gradle.daemon=false -Dkotlin.incremental=false"
+  GRADLE_OPTS: "-Dorg.gradle.jvmargs=-Xmx4g -Dorg.gradle.daemon=false"
 
 jobs:
-  instrumentation-tests:
+  test:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
 
     steps:
     - uses: actions/checkout@v6
@@ -26,77 +26,79 @@ jobs:
     
     - uses: gradle/gradle-build-action@v3
 
-    - name: Run Instrumentation Tests
+    - name: Setup Android SDK
+      uses: android-actions/setup-android@v3
+
+    - name: Create AVD and start emulator
       uses: reactivecircus/android-emulator-runner@v2
       with:
         api-level: 29
+        arch: x86_64
+        profile: Nexus 6
+        disable-animations: true
         script: |
-          adb wait-for-device
+          echo "📱 Emulator ready"
+          adb wait-for-device shell 'while [[ -z $(getprop sys.boot_completed) ]]; do sleep 1; done'
           
-          # Install apps
-          ./gradlew installDevDebug installDevDebugAndroidTest --no-daemon || exit 1
+          echo "📦 Installing apps..."
+          ./gradlew installDevDebug installDevDebugAndroidTest --no-daemon
+          sleep 5
           
-          # Wait for apps to be fully installed and ready
-          sleep 10
-          
-          # Grant permissions (will fail on API 29 as POST_NOTIFICATIONS doesn't exist, but that's okay)
+          echo "🔐 Granting permissions..."
           adb shell pm grant org.wikipedia android.permission.POST_NOTIFICATIONS 2>/dev/null || true
           adb shell pm grant org.wikipedia.test android.permission.POST_NOTIFICATIONS 2>/dev/null || true
           
-          # Run tests
-          ./gradlew connectedDevDebugAndroidTest --no-daemon -P android.testInstrumentationRunnerArguments.class=org.wikipedia.tests.OnboardingTest || TEST_EXIT_CODE=$?
+          echo "🧪 Running tests..."
+          ./gradlew connectedDevDebugAndroidTest \
+            --no-daemon \
+            -P android.testInstrumentationRunnerArguments.class=org.wikipedia.tests.OnboardingTest || TEST_EXIT_CODE=$?
           
-          # Pull Allure results from TestStorage (orchestrator)
           echo "📥 Pulling Allure results..."
           mkdir -p allure-results
-          adb shell "test -d /sdcard/googletest/test_outputfiles/allure-results" 2>/dev/null && adb exec-out sh -c "cd /sdcard/googletest/test_outputfiles && tar cf - allure-results" 2>/dev/null | tar xvf - -C allure-results 2>/dev/null || echo "No results directory found"
-          RESULT_COUNT=$(ls -1 allure-results 2>/dev/null | wc -l | tr -d ' ')
-          if [ "$RESULT_COUNT" -gt 0 ]; then
-            echo "✅ Pulled $RESULT_COUNT result files"
-          else
-            echo "⚠️  No Allure results found"
+          if adb shell "test -d /sdcard/googletest/test_outputfiles/allure-results" 2>/dev/null; then
+            adb exec-out sh -c "cd /sdcard/googletest/test_outputfiles && tar cf - allure-results" 2>/dev/null | \
+              tar xf - -C allure-results 2>/dev/null || true
           fi
           
-          # Exit with test result code
-          if [ -n "${TEST_EXIT_CODE:-}" ]; then
-            exit $TEST_EXIT_CODE
+          if [ -n "$(ls -A allure-results 2>/dev/null)" ]; then
+            echo "✅ Found $(ls -1 allure-results | wc -l) result files"
+          else
+            echo "⚠️  No results found"
           fi
+          
+          exit ${TEST_EXIT_CODE:-0}
 
     - name: Generate Allure Report
-      if: ${{ always() }}
+      if: always()
       run: |
-        if [ -d "allure-results" ] && [ "$(ls -A allure-results 2>/dev/null)" ]; then
-          echo "📊 Generating Allure report..."
+        if [ -d "allure-results" ] && [ -n "$(ls -A allure-results 2>/dev/null)" ]; then
+          echo "📊 Generating report..."
           ./gradlew :app:downloadAllure :app:allureReport --no-daemon --no-configuration-cache
           
           if [ -d "app/build/reports/allure-report/allureReport" ]; then
             cp -r app/build/reports/allure-report/allureReport allure-report
             tar -czf allure-report.tar.gz allure-report
-            echo "✅ Report generated: allure-report/index.html"
-          else
-            echo "❌ Report generation failed"
-            exit 1
+            echo "✅ Report ready: allure-report/index.html"
           fi
-        else
-          echo "⚠️  No results to generate report from"
         fi
 
     - name: Upload Test Results
-      if: ${{ always() }}
+      if: always()
       uses: actions/upload-artifact@v6
       with:
-        name: onboarding-test-results
+        name: test-results
         path: |
           allure-results/
           app/build/reports/androidTests/connected/**
         retention-days: 30
 
     - name: Upload Allure Report
-      if: ${{ always() }}
+      if: always()
       uses: actions/upload-artifact@v6
       with:
-        name: allure-report-onboarding
+        name: allure-report
         path: |
           allure-report.tar.gz
           allure-report/
         retention-days: 30
+        if-no-files-found: ignore

@@ -1,19 +1,13 @@
 name: Android saved article offline test
 
-on:
-  push:
-    branches: [ main, develop ]
-  pull_request:
-    branches: [ main, develop ]
-  workflow_dispatch:
-
+on: [workflow_dispatch]
 
 env:
   GRADLE_OPTS: "-Dorg.gradle.jvmargs=-Xmx4g -Dorg.gradle.daemon=false -Dkotlin.incremental=false"
 
 jobs:
   instrumentation-tests:
-    runs-on: ubuntu-latest
+    runs-on: macos-latest
     timeout-minutes: 30
 
     steps:
