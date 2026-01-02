@@ -29,12 +29,13 @@ jobs:
     - name: Run Instrumentation Tests
       uses: reactivecircus/android-emulator-runner@v2
       with:
-        api-level: 29
+        api-level: 30
+        target: default
         script: |
           adb wait-for-device
           
           # Install apps
-          ./gradlew installDevDebug installDevDebugAndroidTest --no-daemon
+          ./gradlew installDevDebug installDevDebugAndroidTest --no-daemon || exit 1
           
           # Wait for apps to be fully installed and ready
           sleep 10
@@ -49,13 +50,10 @@ jobs:
           # Pull Allure results from TestStorage (orchestrator)
           echo "📥 Pulling Allure results..."
           mkdir -p allure-results
-          
-          adb shell "test -d /sdcard/googletest/test_outputfiles/allure-results" 2>/dev/null && \
-            adb exec-out sh -c "cd /sdcard/googletest/test_outputfiles && tar cf - allure-results" 2>/dev/null | \
-            tar xvf - -C allure-results 2>/dev/null || true
-          
-          if [ -n "$(ls -A allure-results 2>/dev/null)" ]; then
-            echo "✅ Pulled $(ls -1 allure-results | wc -l) result files"
+          adb shell "test -d /sdcard/googletest/test_outputfiles/allure-results" 2>/dev/null && adb exec-out sh -c "cd /sdcard/googletest/test_outputfiles && tar cf - allure-results" 2>/dev/null | tar xvf - -C allure-results 2>/dev/null || echo "No results directory found"
+          RESULT_COUNT=$(ls -1 allure-results 2>/dev/null | wc -l | tr -d ' ')
+          if [ "$RESULT_COUNT" -gt 0 ]; then
+            echo "✅ Pulled $RESULT_COUNT result files"
           else
             echo "⚠️  No Allure results found"
           fi
