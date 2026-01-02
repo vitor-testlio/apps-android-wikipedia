@@ -12,7 +12,7 @@ env:
 
 jobs:
   instrumentation-tests:
-    runs-on: ubuntu-latest
+    runs-on: macos-latest
     timeout-minutes: 30
 
     steps:
@@ -50,14 +50,14 @@ jobs:
           echo "📥 Pulling Allure results..."
           mkdir -p allure-results
           
-          if adb shell "test -d /sdcard/googletest/test_outputfiles/allure-results" 2>/dev/null; then
-            adb exec-out sh -c "cd /sdcard/googletest/test_outputfiles && tar cf - allure-results" 2>/dev/null | tar xvf - -C allure-results 2>/dev/null || true
-          fi
+          adb shell "test -d /sdcard/googletest/test_outputfiles/allure-results" 2>/dev/null && \
+            adb exec-out sh -c "cd /sdcard/googletest/test_outputfiles && tar cf - allure-results" 2>/dev/null | \
+            tar xvf - -C allure-results 2>/dev/null || true
           
-          if [ -z "$(ls -A allure-results 2>/dev/null)" ]; then
-            echo "⚠️  No Allure results found"
-          else
+          if [ -n "$(ls -A allure-results 2>/dev/null)" ]; then
             echo "✅ Pulled $(ls -1 allure-results | wc -l) result files"
+          else
+            echo "⚠️  No Allure results found"
           fi
           
           # Exit with test result code
