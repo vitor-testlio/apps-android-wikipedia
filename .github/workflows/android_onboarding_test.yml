@@ -84,21 +84,12 @@ jobs:
           emulator-options: -no-snapshot-save -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
           disable-animations: true
           script: |
-            # Wait for emulator to be fully ready
             adb wait-for-device
             adb shell settings put global window_animation_scale 0.0
             adb shell settings put global transition_animation_scale 0.0
             adb shell settings put global animator_duration_scale 0.0
-            
-            # Clear any previous allure results on device
             adb shell rm -rf /sdcard/allure-results || true
-            
-            # Run only OnboardingTest
-            ./gradlew connectedDevDebugAndroidTest \
-              --no-daemon \
-              --stacktrace \
-              -Pandroid.testInstrumentationRunnerArguments.class=org.wikipedia.tests.OnboardingTest \
-              || true  # Continue even if tests fail to capture results
+            ./gradlew connectedDevDebugAndroidTest --no-daemon --stacktrace -Pandroid.testInstrumentationRunnerArguments.class=org.wikipedia.tests.OnboardingTest || true
 
       - name: Pull Allure results from device
         if: always()
