@@ -9,153 +9,133 @@ on:
 
 env:
   GRADLE_OPTS: "-Dorg.gradle.jvmargs=-Xmx4g -Dorg.gradle.daemon=false"
-  APP_ID: "org.wikipedia.dev"
-  TEST_ID: "org.wikipedia.test"
 
 jobs:
   test:
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 45
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
-      - uses: actions/setup-java@v4
+      - uses: actions/setup-java@v5
         with:
-          distribution: temurin
+          distribution: "temurin"
           java-version: "17"
+          cache: "gradle"
 
-      - name: Setup Gradle
-        uses: gradle/actions/setup-gradle@v4
-        with:
-          cache-read-only: ${{ github.event_name == 'pull_request' }}
+      - uses: gradle/gradle-build-action@v3
 
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
 
-      - name: Gradle warm-up
-        run: ./gradlew --version
-
-      - name: Run instrumentation tests on emulator
+      - name: Create AVD and start emulator
         id: emulator
         uses: reactivecircus/android-emulator-runner@v2
         with:
           api-level: 29
           arch: x86_64
-          profile: pixel_5
+          profile: Nexus 6
           disable-animations: true
-          emulator-options: >-
-            -no-window
-            -noaudio
-            -no-boot-anim
-            -gpu swiftshader_indirect
-            -no-snapshot-save
           script: |
-            set -euo pipefail
+            set -eu
 
-            echo "📱 Waiting for emulator boot..."
+            echo "📱 Emulator ready"
             adb wait-for-device
-            adb shell 'while [ "$(getprop sys.boot_completed)" != "1" ]; do sleep 1; done'
-            adb shell input keyevent 82 || true
+            adb shell 'while [ -z "$(getprop sys.boot_completed)" ]; do sleep 1; done' || true
 
             echo "🧹 Cleaning previous Allure results on device..."
-            adb shell rm -rf /sdcard/allure-results \
-                            /sdcard/Download/allure-results \
-                            /sdcard/googletest/test_outputfiles/allure-results \
-                            /sdcard/Android/data/*/files/allure-results || true
+            adb shell rm -rf /sdcard/googletest/test_outputfiles/allure-results \
+                            /sdcard/allure-results \
+                            /sdcard/Download/allure-results || true
 
-            echo "📦 Installing app + tests..."
-            ./gradlew :app:installDevDebug :app:installDevDebugAndroidTest --no-daemon
+            echo "📦 Installing apps..."
+            ./gradlew installDevDebug installDevDebugAndroidTest --no-daemon
+            sleep 5
 
             echo "🔐 Granting permissions (best-effort)..."
-            adb shell pm grant "${APP_ID}" android.permission.POST_NOTIFICATIONS 2>/dev/null || true
-            adb shell pm grant "${TEST_ID}" android.permission.POST_NOTIFICATIONS 2>/dev/null || true
+            adb shell pm grant org.wikipedia android.permission.POST_NOTIFICATIONS 2>/dev/null || true
+            adb shell pm grant org.wikipedia.dev android.permission.POST_NOTIFICATIONS 2>/dev/null || true
+            adb shell pm grant org.wikipedia.test android.permission.POST_NOTIFICATIONS 2>/dev/null || true
+            adb shell pm grant org.wikipedia.dev.test android.permission.POST_NOTIFICATIONS 2>/dev/null || true
 
             echo "🧪 Running tests..."
-            set +e
-            ./gradlew :app:connectedDevDebugAndroidTest \
+            TEST_EXIT_CODE=0
+            ./gradlew connectedDevDebugAndroidTest \
               --no-daemon \
               --stacktrace \
-              -Pandroid.testInstrumentationRunnerArguments.class=org.wikipedia.tests.OnboardingTest
-            TEST_EXIT_CODE=$?
-            set -e
+              -Pandroid.testInstrumentationRunnerArguments.class=org.wikipedia.tests.OnboardingTest || TEST_EXIT_CODE=$?
 
-            echo "📥 Pulling Allure results from device..."
+            echo "${TEST_EXIT_CODE}" > test-exit-code.txt
+            echo "✅ Test exit code captured: ${TEST_EXIT_CODE}"
+
+            echo "📥 Pulling Allure results..."
             rm -rf allure-results
             mkdir -p allure-results
 
-            RESULT_DIRS="$(adb shell '
-              for d in \
-                /sdcard/allure-results \
-                /sdcard/Download/allure-results \
-                /sdcard/googletest/test_outputfiles/allure-results
-              do
-                [ -d "$d" ] && echo "$d"
-              done
-              find /sdcard/Android/data -maxdepth 6 -type d -name allure-results 2>/dev/null | head -n 10
-            ' | tr -d "\r")"
+            # Primary path (what you already used)
+            if adb shell "test -d /sdcard/googletest/test_outputfiles/allure-results" 2>/dev/null; then
+              adb exec-out sh -c "cd /sdcard/googletest/test_outputfiles && tar cf - allure-results" \
+                | tar xf - -C allure-results 2>/dev/null || true
+            fi
 
-            if [ -n "$RESULT_DIRS" ]; then
-              echo "$RESULT_DIRS" | while IFS= read -r d; do
-                [ -z "$d" ] && continue
-                echo "  ↳ Found: $d"
-                tmp="$(mktemp -d)"
-                adb exec-out sh -c "cd \"$(dirname "$d")\" && tar cf - \"$(basename "$d")\"" \
-                  | tar xf - -C "$tmp" || true
-                if [ -d "$tmp/allure-results" ]; then
-                  cp -a "$tmp/allure-results/." allure-results/ || true
+            # Fallback common paths
+            if [ -z "$(ls -A allure-results 2>/dev/null || true)" ]; then
+              for d in /sdcard/allure-results /sdcard/Download/allure-results; do
+                if adb shell "test -d ${d}" 2>/dev/null; then
+                  parent="$(dirname "${d}")"
+                  base="$(basename "${d}")"
+                  adb exec-out sh -c "cd ${parent} && tar cf - ${base}" \
+                    | tar xf - -C allure-results 2>/dev/null || true
                 fi
-                rm -rf "$tmp" || true
               done
-            else
-              echo "⚠️  No Allure results directory found on device."
+            fi
+
+            # Flatten nested allure-results/allure-results if it happens
+            if [ -d "allure-results/allure-results" ] && [ -n "$(ls -A allure-results/allure-results 2>/dev/null || true)" ]; then
+              cp -a allure-results/allure-results/. allure-results/ || true
+              rm -rf allure-results/allure-results || true
             fi
 
             RESULT_COUNT="$(ls -1 allure-results 2>/dev/null | wc -l | tr -d ' ')"
             if [ "${RESULT_COUNT}" -gt 0 ]; then
-              echo "✅ Pulled ${RESULT_COUNT} Allure result files"
+              echo "✅ Found ${RESULT_COUNT} result files"
             else
-              echo "⚠️  No Allure result files pulled"
+              echo "⚠️  No results found"
             fi
 
-            echo "exit_code=${TEST_EXIT_CODE}" >> "$GITHUB_OUTPUT"
+            # Do not fail this step; fail later after artifacts/report are uploaded
             exit 0
 
       - name: Generate Allure Report
         if: always()
+        shell: bash
         run: |
           set -euo pipefail
 
           if [ -d "allure-results" ] && [ -n "$(ls -A allure-results 2>/dev/null)" ]; then
-            echo "📊 Generating Allure report..."
-            ./gradlew :app:downloadAllure :app:copyAllureResults :app:allureReport \
-              --no-daemon \
-              --no-configuration-cache \
-              --stacktrace
-
-            rm -rf allure-report
-            mkdir -p allure-report
+            echo "📊 Generating report..."
+            ./gradlew :app:downloadAllure :app:copyAllureResults :app:allureReport --no-daemon --no-configuration-cache --stacktrace
 
             if [ -d "app/build/reports/allure-report" ]; then
-              cp -a "app/build/reports/allure-report/." allure-report/
-            fi
-
-            if [ -f "allure-report/index.html" ]; then
+              rm -rf allure-report
+              cp -r app/build/reports/allure-report allure-report
               tar -czf allure-report.tar.gz allure-report
-              echo "✅ Allure report ready: allure-report/index.html"
+              echo "✅ Report ready: allure-report/index.html"
             else
-              echo "⚠️  Allure report not found after generation."
+              echo "⚠️  Allure report directory not found"
             fi
           else
-            echo "⚠️  Skipping Allure report generation (no allure-results)."
+            echo "⚠️  No allure-results; skipping report generation"
           fi
 
       - name: Upload Test Results
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: test-results
           path: |
+            test-exit-code.txt
             allure-results/
             app/build/reports/androidTests/connected/**
             app/build/outputs/androidTest-results/connected/**
@@ -164,7 +144,7 @@ jobs:
 
       - name: Upload Allure Report
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: allure-report
           path: |
@@ -175,15 +155,24 @@ jobs:
 
       - name: Fail job if tests failed
         if: always()
+        shell: bash
         run: |
           set -euo pipefail
-          code="${{ steps.emulator.outputs.exit_code }}"
-          if [ -z "${code}" ]; then
+
+          if [ ! -f test-exit-code.txt ]; then
             echo "⚠️  No test exit code captured; failing for safety."
             exit 1
           fi
-          if [ "${code}" != "0" ]; then
-            echo "❌ Tests failed with exit code ${code}"
+
+          code="$(cat test-exit-code.txt | tr -d '[:space:]' || true)"
+          if [ -z "${code}" ]; then
+            echo "⚠️  Empty test exit code; failing for safety."
             exit 1
           fi
+
+          if [ "${code}" != "0" ]; then
+            echo "❌ Tests failed with exit code ${code}"
+            exit "${code}"
+          fi
+
           echo "✅ Tests passed"
