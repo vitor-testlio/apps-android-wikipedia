@@ -88,47 +88,125 @@ jobs:
             adb shell settings put global window_animation_scale 0.0
             adb shell settings put global transition_animation_scale 0.0
             adb shell settings put global animator_duration_scale 0.0
+            
+            # Clean up any previous test storage data
+            adb shell rm -rf /sdcard/googletest/test_outputfiles/ || true
             adb shell rm -rf /sdcard/allure-results || true
+            
+            # Run tests
             ./gradlew connectedDevDebugAndroidTest --no-daemon --stacktrace -Pandroid.testInstrumentationRunnerArguments.class=org.wikipedia.tests.OnboardingTest || true
+            
+            # Debug: List potential result locations
+            echo "=== Debug: Checking all potential result locations ==="
+            echo "1. TestStorage (googletest):"
+            adb shell ls -laR /sdcard/googletest/ 2>/dev/null || echo "   No googletest dir"
+            
+            echo ""
+            echo "2. SDCard allure-results:"
+            adb shell ls -la /sdcard/allure-results/ 2>/dev/null || echo "   No /sdcard/allure-results"
+            
+            echo ""  
+            echo "3. App internal storage (org.wikipedia.dev):"
+            adb shell run-as org.wikipedia.dev ls -laR files/ 2>/dev/null || echo "   Cannot access"
+            
+            echo ""
+            echo "4. Test app storage (org.wikipedia.test):"
+            adb shell run-as org.wikipedia.test ls -laR files/ 2>/dev/null || echo "   Cannot access"
+            
+            echo ""
+            echo "5. Finding all allure-related files:"
+            adb shell find /sdcard -name "*allure*" -o -name "*result*.json" 2>/dev/null | head -30 || echo "   None found"
+            
+            echo ""
+            echo "6. Gradle output directories:"
+            ls -laR app/build/outputs/connected_android_test_additional_output/ 2>/dev/null || echo "   No connected_android_test_additional_output"
+            ls -laR app/build/outputs/androidTest-results/ 2>/dev/null || echo "   No androidTest-results"
 
       - name: Pull Allure results from device
         if: always()
         run: |
+          chmod +x pull-allure-results.sh
+          
+          # Run the project's pull script (skip report generation, just pull)
+          # We'll generate report separately for better control
+          
           mkdir -p allure-results
           
-          # Pull results from device sdcard
-          adb pull /sdcard/allure-results ./allure-results/ || echo "No results on sdcard"
+          echo "=== Searching for Allure results ==="
           
-          # Also check app-specific directories
-          PACKAGE_NAME="org.wikipedia.dev.test"
-          adb pull /data/data/$PACKAGE_NAME/files/allure-results ./allure-results/ 2>/dev/null || echo "No results in app files"
+          # Check all known locations (from pull-allure-results.sh)  
+          LOCATIONS=(
+            "/sdcard/googletest/test_outputfiles/allure-results"
+            "/storage/emulated/0/googletest/test_outputfiles/allure-results"
+            "/sdcard/allure-results"
+            "/storage/emulated/0/allure-results"
+            "/data/local/tmp/allure-results"
+          )
           
-          # Check for results in the build directory as well
-          if [ -d "app/build/outputs/allure-results" ]; then
-            cp -r app/build/outputs/allure-results/* ./allure-results/ 2>/dev/null || true
+          for loc in "${LOCATIONS[@]}"; do
+            echo "Checking: $loc"
+            if adb shell "test -d $loc" 2>/dev/null; then
+              echo "✓ Found directory at $loc"
+              adb shell "ls -la $loc" || true
+              
+              # Pull using tar to handle permissions
+              adb exec-out sh -c "cd $(dirname $loc) && tar cf - $(basename $loc)" 2>/dev/null | tar xvf - -C ./allure-results --strip-components=0 2>/dev/null || {
+                # Fallback to direct pull
+                adb pull "$loc" ./pulled-results/ 2>/dev/null || true
+                if [ -d "./pulled-results" ]; then
+                  cp -r ./pulled-results/* ./allure-results/ 2>/dev/null || true
+                  rm -rf ./pulled-results
+                fi
+              }
+            fi
+          done
+          
+          # Try pulling from app internal storage using run-as
+          echo ""
+          echo "Trying app internal storage with run-as..."
+          for pkg in "org.wikipedia.dev" "org.wikipedia.test"; do
+            echo "Checking $pkg..."
+            adb shell "run-as $pkg ls files/allure-results/" 2>/dev/null && {
+              echo "Found results in $pkg, pulling..."
+              mkdir -p ./pulled-from-app
+              # Use tar through run-as to preserve file structure
+              adb exec-out run-as $pkg sh -c "cd files && tar cf - allure-results" 2>/dev/null | tar xvf - -C ./pulled-from-app 2>/dev/null || true
+              if [ -d "./pulled-from-app/allure-results" ]; then
+                cp -r ./pulled-from-app/allure-results/* ./allure-results/ 2>/dev/null || true
+              fi
+              rm -rf ./pulled-from-app
+            } || true
+          done
+          
+          # Also check connected_android_test_additional_output (Gradle's output)
+          if [ -d "app/build/outputs/connected_android_test_additional_output" ]; then
+            echo "Found Gradle test output directory"
+            find app/build/outputs/connected_android_test_additional_output -name "*.json" -exec cp {} ./allure-results/ \; 2>/dev/null || true
           fi
           
-          # List what we found
-          echo "=== Allure Results Found ==="
-          find ./allure-results -type f -name "*.json" | head -20 || echo "No JSON files found"
-          ls -la ./allure-results/ || echo "Directory empty or not found"
+          # Flatten nested directories
+          if [ -d "allure-results/allure-results" ]; then
+            mv allure-results/allure-results/* allure-results/ 2>/dev/null || true
+            rm -rf allure-results/allure-results
+          fi
+          
+          echo ""
+          echo "=== Allure Results Summary ==="
+          ls -la ./allure-results/ 2>/dev/null || echo "No results directory"
+          echo "JSON files: $(find ./allure-results -name '*.json' -type f 2>/dev/null | wc -l)"
 
-      - name: Copy test results for Allure report
+      - name: Copy test results for Allure report  
         if: always()
         run: |
-          # Ensure build directory has the results for Gradle Allure plugin
           mkdir -p app/build/allure-results
           
-          # Handle nested directory structure
-          if [ -d "allure-results/allure-results" ]; then
-            cp -r allure-results/allure-results/* app/build/allure-results/ 2>/dev/null || true
+          # Copy all result files to build directory
+          if [ -d "./allure-results" ]; then
+            cp -r ./allure-results/* app/build/allure-results/ 2>/dev/null || true
           fi
           
-          # Copy from root allure-results
-          cp -r allure-results/*.json app/build/allure-results/ 2>/dev/null || true
-          
           echo "=== Files in app/build/allure-results ==="
-          ls -la app/build/allure-results/ || echo "Empty"
+          ls -la app/build/allure-results/ 2>/dev/null || echo "Empty"
 
       - name: Generate Allure Report
         if: always()
